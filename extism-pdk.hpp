@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
+#include <memory>
 #include <span>
 #include <stdint.h>
 #include <string>
@@ -136,7 +138,8 @@ public:
   std::vector<std::byte> bytes(const uint64_t src_offset = 0,
                                const size_t max = SIZE_MAX) const;
   bool load(std::span<std::byte> dest, const uint64_t src_offset = 0) const;
-  bool store(std::span<std::byte> src, const uint64_t dest_offset = 0);
+  template <typename T>
+  bool store(std::span<T> srca, const uint64_t dest_offset);
   bool store(std::string_view src, const uint64_t dest_offset = 0);
 };
 
@@ -183,42 +186,43 @@ bool Handle::load(std::span<std::byte> dest, const uint64_t src_offset) const {
   if (src_offset + dest.size() > size) {
     return false;
   }
-  const uint64_t offs = handle + src_offset;
-  const size_t n = dest.size();
-  const size_t chunk_count = n >> 3;
-  uint64_t *i64_buffer = reinterpret_cast<uint64_t *>(dest.data());
-  for (size_t chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
-    i64_buffer[chunk_idx] = imports::load_u64(offs + (chunk_idx << 3));
-  }
 
-  size_t remainder_offset = chunk_count << 3;
-  const size_t remainder_end = remainder_offset + (n & 7);
-  for (uint8_t *u8_buffer = reinterpret_cast<uint8_t *>(dest.data());
-       remainder_offset < remainder_end; remainder_offset++) {
-    u8_buffer[remainder_offset] = imports::load_u8(offs + remainder_offset);
+  const uint64_t offs = handle + src_offset;
+  auto it = dest.begin();
+  const auto chunkend = dest.begin() + (dest.size() / 8) * 8;
+  for (; it != chunkend; it += 8) {
+    const uint64_t value = imports::load_u64(offs + (it - dest.begin()));
+    std::memcpy(std::to_address(it), &value, sizeof(value));
+  }
+  for (; it != dest.end(); ++it) {
+    *it = static_cast<std::byte>(imports::load_u8(offs + (it - dest.begin())));
+  }
+  return true;
+}
+
+template <typename T>
+bool Handle::store(std::span<T> src_span, const uint64_t dest_offset) {
+  if (dest_offset + src_span.size() > size) {
+    return false;
+  }
+  auto byte_src = std::as_bytes(std::move(src_span));
+  const uint64_t offs = handle + dest_offset;
+  auto it = byte_src.begin();
+  const auto chunkend = byte_src.begin() + (byte_src.size() / 8) * 8;
+  for (; it != chunkend; it += 8) {
+    uint64_t value;
+    std::memcpy(&value, std::to_address(it), sizeof(value));
+    imports::store_u64(offs + (it - byte_src.begin()), value);
+  }
+  for (; it != byte_src.end(); ++it) {
+    imports::store_u8(offs + (it - byte_src.begin()),
+                      static_cast<uint8_t>(*it));
   }
   return true;
 }
 
 bool Handle::store(std::string_view src, const uint64_t dest_offset) {
-  if (dest_offset + src.size() > size) {
-    return false;
-  }
-  const size_t length = src.size();
-  const size_t chunk_count = length >> 3;
-  const uint64_t offs = handle + dest_offset;
-  const uint64_t *i64_buffer = reinterpret_cast<const uint64_t *>(src.data());
-  for (size_t chunk_idx = 0; chunk_idx < chunk_count; chunk_idx++) {
-    imports::store_u64(offs + (chunk_idx << 3), i64_buffer[chunk_idx]);
-  }
-
-  size_t remainder_offset = chunk_count << 3;
-  const size_t remainder_end = remainder_offset + (length & 7);
-  for (const uint8_t *u8_buffer = reinterpret_cast<const uint8_t *>(src.data());
-       remainder_offset < remainder_end; remainder_offset++) {
-    imports::store_u8(offs + remainder_offset, u8_buffer[remainder_offset]);
-  }
-  return true;
+  return store(std::span{src}, dest_offset);
 }
 
 std::string Handle::string(const uint64_t src_offset, const size_t max) const {
