@@ -88,10 +88,13 @@ EXTISM_IMPORT_ENV("load_u64")
 extern uint64_t load_u64(const ExtismPointer);
 }; // namespace imports
 
-std::vector<std::byte> input_bytes(const uint64_t src_offset = 0,
-                                   const size_t max = SIZE_MAX);
+template <typename T>
+std::vector<T> input_vec(const uint64_t src_offset = 0,
+                         const size_t max = SIZE_MAX);
 std::string input_string(const uint64_t src_offset = 0,
                          const size_t max = SIZE_MAX);
+template <typename T> T input_stack(const uint64_t src_offset = 0);
+template <typename T> std::unique_ptr<T> input(const uint64_t src_offset = 0);
 
 void error_set(const std::string_view s);
 
@@ -109,10 +112,10 @@ void var_set(const std::string_view name, const std::string_view value);
 
 void var_set(const std::string_view name, const std::span<std::byte> value);
 
-void log_info(const std::string_view message);
-void log_debug(const std::string_view message);
-void log_warn(const std::string_view message);
-void log_error(const std::string_view message);
+bool log_info(const std::string_view message);
+bool log_debug(const std::string_view message);
+bool log_warn(const std::string_view message);
+bool log_error(const std::string_view message);
 
 typedef enum {
   Info,
@@ -123,49 +126,53 @@ typedef enum {
 
 bool log(const std::string_view message, const Log level);
 
-bool output(const std::string_view data);
-bool output(const std::span<std::byte> data);
+template <typename T> bool output(std::span<const T> data);
+bool output(std::string_view data);
+template <typename T> bool output_type(T &data);
 
-class Handle : public imports::RawHandle {
-  uint64_t size;
+template <typename T> class Handle : public imports::RawHandle {
+  uint64_t byte_size;
 
 public:
   Handle(RawHandle _handle)
-      : RawHandle(_handle), size(imports::length(handle)) {}
-  Handle(RawHandle handle, uint64_t size) : RawHandle(handle), size(size) {}
+      : RawHandle(_handle), byte_size(imports::length(handle)) {}
+  Handle(RawHandle handle, uint64_t byte_size)
+      : RawHandle(handle), byte_size(byte_size) {}
+  bool load(std::span<T> dest, const uint64_t src_offset = 0) const;
+  bool store(std::span<const T> srca, const uint64_t dest_offset = 0) const;
   std::string string(const uint64_t src_offset = 0,
                      const size_t max = SIZE_MAX) const;
-  std::vector<std::byte> bytes(const uint64_t src_offset = 0,
-                               const size_t max = SIZE_MAX) const;
-  bool load(std::span<std::byte> dest, const uint64_t src_offset = 0) const;
-  template <typename T>
-  bool store(std::span<T> srca, const uint64_t dest_offset);
-  bool store(std::string_view src, const uint64_t dest_offset = 0);
+  std::vector<T> vec(const uint64_t src_offset = 0,
+                     const size_t max = SIZE_MAX) const;
+  T get_stack(const uint64_t src_offset = 0);
+  std::unique_ptr<T> get(const uint64_t src_offset = 0);
 };
 
-class OwnedHandle : public Handle {
+template <typename T> class OwnedHandle : public Handle<T> {
 public:
-  OwnedHandle(Handle handle) : Handle(handle) {}
-  ~OwnedHandle() { imports::free(handle); }
+  OwnedHandle(Handle<T> handle) : Handle<T>(handle) {}
+  ~OwnedHandle() { imports::free(this->handle); }
 };
 
-class HttpResponse {
-  Handle handle;
+template <typename T> class HttpResponse {
+  Handle<std::byte> handle;
 
 public:
   const int32_t status;
-  HttpResponse(Handle handle)
+  HttpResponse(Handle<T> handle)
       : handle(handle), status(imports::http_status_code()) {}
 
-  std::vector<std::byte> body_bytes() const;
+  std::vector<T> body_vec() const;
   std::string body_string() const;
 };
 
-HttpResponse http_request(const std::string_view req,
-                          const std::string_view body);
-HttpResponse http_request(const std::string_view req,
-                          const std::span<std::byte> body);
+template <typename T, typename U>
+HttpResponse<T> http_request(const std::string_view req,
+                             const std::span<U> body);
 
+template <typename T>
+HttpResponse<T> http_request(const std::string_view req,
+                             const std::string_view body);
 } // namespace extism
 
 #endif // extism_pdk_hpp
@@ -182,11 +189,13 @@ HttpResponse http_request(const std::string_view req,
 
 namespace extism {
 
-bool Handle::load(std::span<std::byte> dest, const uint64_t src_offset) const {
-  if (src_offset + dest.size() > size) {
+template <typename T>
+bool Handle<T>::load(std::span<T> dest_span, const uint64_t src_offset) const {
+  if (src_offset + dest_span.size_bytes() > byte_size) {
     return false;
   }
 
+  auto dest = std::as_writable_bytes(dest_span);
   const uint64_t offs = handle + src_offset;
   auto it = dest.begin();
   const auto chunkend = dest.begin() + (dest.size() / 8) * 8;
@@ -201,11 +210,13 @@ bool Handle::load(std::span<std::byte> dest, const uint64_t src_offset) const {
 }
 
 template <typename T>
-bool Handle::store(std::span<T> src_span, const uint64_t dest_offset) {
-  if (dest_offset + src_span.size() > size) {
+bool Handle<T>::store(std::span<const T> src_span,
+                      const uint64_t dest_offset) const {
+  if (dest_offset + src_span.size_bytes() > byte_size) {
     return false;
   }
-  auto byte_src = std::as_bytes(std::move(src_span));
+
+  auto byte_src = std::as_bytes(src_span);
   const uint64_t offs = handle + dest_offset;
   auto it = byte_src.begin();
   const auto chunkend = byte_src.begin() + (byte_src.size() / 8) * 8;
@@ -221,41 +232,102 @@ bool Handle::store(std::span<T> src_span, const uint64_t dest_offset) {
   return true;
 }
 
-bool Handle::store(std::string_view src, const uint64_t dest_offset) {
-  return store(std::span{src}, dest_offset);
+template <typename T>
+std::vector<T> Handle<T>::vec(const uint64_t src_offset,
+                              const size_t max_bytes) const {
+  if (src_offset >= byte_size) {
+    return {};
+  }
+  const uint64_t bufsize =
+      std::min<uint64_t>(byte_size - src_offset, max_bytes);
+  std::vector<T> vec(bufsize / sizeof(T));
+  load(vec, src_offset);
+  return vec;
 }
 
-std::string Handle::string(const uint64_t src_offset, const size_t max) const {
-  if (src_offset >= size) {
+template <typename T>
+std::string Handle<T>::string(const uint64_t src_offset,
+                              const size_t max) const {
+  if (src_offset >= byte_size) {
     return "";
   }
   std::string output;
-  const uint64_t bufsize = std::min<uint64_t>(size - src_offset, max);
+  const uint64_t bufsize = std::min<uint64_t>(byte_size - src_offset, max);
   output.resize_and_overwrite(bufsize,
                               [this, src_offset](char *buf, size_t n) noexcept {
-                                std::span myspan{(std::byte *)buf, n};
-                                load(myspan, src_offset);
+                                load({buf, n}, src_offset);
                                 return n;
                               });
   return output;
 }
 
+template <typename T> T Handle<T>::get_stack(const uint64_t src_offset) {
+  if ((src_offset + sizeof(T)) > byte_size) {
+    return {};
+  }
+  T t;
+  load(std::span<T, 1>{std::addressof(t), 1}, src_offset);
+  return t;
+}
+
+template <typename T>
+std::unique_ptr<T> Handle<T>::get(const uint64_t src_offset) {
+  if ((src_offset + sizeof(T)) > byte_size) {
+    return nullptr;
+  }
+  auto ptr = std::make_unique<T>();
+  load(std::span<T, 1>{ptr.get(), 1}, src_offset);
+  return ptr;
+}
+
+template <typename T>
+std::vector<T> input_vec(const uint64_t src_offset, const size_t max) {
+  Handle<T> handle(imports::input());
+  return handle.vec(src_offset, max);
+}
+
 std::string input_string(const uint64_t src_offset, const size_t max) {
-  Handle handle(imports::input());
+  Handle<char> handle(imports::input());
   return handle.string(src_offset, max);
 }
 
-bool output(const std::string_view data) {
-  auto handle = imports::alloc(data.size());
+template <typename T> T input_stack(const uint64_t src_offset) {
+  Handle<T> handle(imports::input());
+  return handle.get_stack();
+}
+
+template <typename T> std::unique_ptr<T> input(const uint64_t src_offset) {
+  Handle<T> handle(imports::input());
+  return handle.get();
+}
+
+template <typename T> bool output(std::span<const T> data) {
+  auto handle = imports::alloc(data.size_bytes());
   if (!handle) {
     return false;
   }
-  Handle h(std::move(handle), data.size());
+  Handle<T> h(handle, data.size_bytes());
   if (!h.store(data)) {
     imports::free(h);
     return false;
   }
-  imports::output_set(h, data.size());
+  imports::output_set(h, data.size_bytes());
+  return true;
+}
+
+bool output(std::string_view data) { return output<const char>(data); }
+
+template <typename T> bool output_type(T &data) {
+  auto handle = imports::alloc(sizeof(data));
+  if (!handle) {
+    return false;
+  }
+  Handle<T> h(handle, sizeof(data));
+  if (!h.store(std::span<T, 1>{std::addressof(data), 1})) {
+    imports::free(h);
+    return false;
+  }
+  imports::output_set(h, sizeof(data));
   return true;
 }
 
@@ -265,7 +337,7 @@ bool log(const std::string_view message, const Log level) {
   if (!rawbuf) {
     return false;
   }
-  OwnedHandle buf(std::move(rawbuf));
+  OwnedHandle<const char> buf(rawbuf);
   if (!buf.store(message)) {
     return false;
   }
@@ -285,6 +357,13 @@ bool log(const std::string_view message, const Log level) {
   }
   return true;
 }
+
+bool log_info(const std::string_view message) { return log(message, Info); }
+bool log_debug(const std::string_view message) { return log(message, Debug); }
+
+bool log_warn(const std::string_view message) { return log(message, Warn); }
+bool log_error(const std::string_view message) { return log(message, Error); }
+
 } // namespace extism
 
 #endif // extism_pdk_cpp
