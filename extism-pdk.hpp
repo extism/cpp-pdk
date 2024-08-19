@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdint.h>
 #include <string>
@@ -96,10 +97,11 @@ std::string input_string(const uint64_t src_offset = 0,
 template <typename T> T input_stack(const uint64_t src_offset = 0);
 template <typename T> std::unique_ptr<T> input(const uint64_t src_offset = 0);
 
-void error_set(const std::string_view s);
+bool error_set(const std::string_view s);
 
-std::string config_string(const std::string_view key, const uint64_t offset = 0,
-                          const size_t max = SIZE_MAX);
+std::optional<std::string> config_string(const std::string_view key,
+                                         const uint64_t offset = 0,
+                                         const size_t max = SIZE_MAX);
 
 std::vector<std::byte> var_bytes(const std::string_view name,
                                  const uint64_t offset = 0,
@@ -128,7 +130,7 @@ bool log(const std::string_view message, const Log level);
 
 template <typename T> bool output(std::span<const T> data);
 bool output(std::string_view data);
-template <typename T> bool output_type(T &data);
+template <typename T> bool output_type(const T &data);
 
 template <typename T> class Handle : public imports::RawHandle {
   uint64_t byte_size;
@@ -138,6 +140,7 @@ public:
       : RawHandle(_handle), byte_size(imports::length(handle)) {}
   Handle(RawHandle handle, uint64_t byte_size)
       : RawHandle(handle), byte_size(byte_size) {}
+  static std::optional<Handle<T>> from(std::span<const T> src);
   bool load(std::span<T> dest, const uint64_t src_offset = 0) const;
   bool store(std::span<const T> srca, const uint64_t dest_offset = 0) const;
   std::string string(const uint64_t src_offset = 0,
@@ -151,7 +154,13 @@ public:
 template <typename T> class OwnedHandle : public Handle<T> {
 public:
   OwnedHandle(Handle<T> handle) : Handle<T>(handle) {}
-  ~OwnedHandle() { imports::free(this->handle); }
+  OwnedHandle(OwnedHandle<T> &&orig) : Handle<T>(orig) { orig.handle = 0; }
+  static std::optional<OwnedHandle<T>> from(std::span<const T> src);
+  ~OwnedHandle() {
+    if (this->handle) {
+      imports::free(this->handle);
+    }
+  }
 };
 
 template <typename T> class HttpResponse {
@@ -281,6 +290,28 @@ std::unique_ptr<T> Handle<T>::get(const uint64_t src_offset) {
 }
 
 template <typename T>
+std::optional<Handle<T>> Handle<T>::from(std::span<const T> src) {
+  auto handle = imports::alloc(src.size_bytes());
+  if (!handle) {
+    return std::nullopt;
+  }
+  Handle<T> h(handle, src.size_bytes());
+  if (!h.store(src)) {
+    imports::free(h);
+    return std::nullopt;
+  }
+  return h;
+}
+
+template <typename T>
+std::optional<OwnedHandle<T>> OwnedHandle<T>::from(std::span<const T> src) {
+  if (auto h = Handle<T>::from(src)) {
+    return OwnedHandle<T>(*h);
+  }
+  return std::nullopt;
+}
+
+template <typename T>
 std::vector<T> input_vec(const uint64_t src_offset, const size_t max) {
   Handle<T> handle(imports::input());
   return handle.vec(src_offset, max);
@@ -302,57 +333,63 @@ template <typename T> std::unique_ptr<T> input(const uint64_t src_offset) {
 }
 
 template <typename T> bool output(std::span<const T> data) {
-  auto handle = imports::alloc(data.size_bytes());
-  if (!handle) {
-    return false;
+  if (auto h = Handle<const T>::from(data)) {
+    imports::output_set(*h, data.size_bytes());
+    return true;
   }
-  Handle<T> h(handle, data.size_bytes());
-  if (!h.store(data)) {
-    imports::free(h);
-    return false;
-  }
-  imports::output_set(h, data.size_bytes());
-  return true;
+  return false;
 }
 
 bool output(std::string_view data) { return output<const char>(data); }
 
-template <typename T> bool output_type(T &data) {
-  auto handle = imports::alloc(sizeof(data));
-  if (!handle) {
-    return false;
+template <typename T> bool output_type(const T &data) {
+  if (auto h = Handle<const T>::from(
+          std::span<const T, 1>{std::addressof(data), 1})) {
+    imports::output_set(*h, sizeof(data));
+    return true;
   }
-  Handle<T> h(handle, sizeof(data));
-  if (!h.store(std::span<T, 1>{std::addressof(data), 1})) {
-    imports::free(h);
-    return false;
+  return false;
+}
+
+bool error_set(const std::string_view s) {
+  if (auto h = Handle<const char>::from(s)) {
+    imports::error_set(*h);
+    return true;
   }
-  imports::output_set(h, sizeof(data));
-  return true;
+  return false;
+}
+
+std::optional<std::string> config_string(const std::string_view key,
+                                         const uint64_t offset,
+                                         const size_t max) {
+  if (auto kh = OwnedHandle<char>::from(key)) {
+    auto rawvh = imports::config_get(*kh);
+    if (rawvh) {
+      OwnedHandle<char> vh(rawvh);
+      return vh.string(offset, max);
+    }
+  }
+  return std::nullopt;
 }
 
 // Write to Extism log
 bool log(const std::string_view message, const Log level) {
-  auto rawbuf = imports::alloc(message.length());
-  if (!rawbuf) {
-    return false;
-  }
-  OwnedHandle<const char> buf(rawbuf);
-  if (!buf.store(message)) {
+  auto buf = OwnedHandle<const char>::from(message);
+  if (!buf) {
     return false;
   }
   switch (level) {
   case Info:
-    imports::log_info(buf);
+    imports::log_info(*buf);
     break;
   case Debug:
-    imports::log_debug(buf);
+    imports::log_debug(*buf);
     break;
   case Warn:
-    imports::log_warn(buf);
+    imports::log_warn(*buf);
     break;
   case Error:
-    imports::log_error(buf);
+    imports::log_error(*buf);
     break;
   }
   return true;
