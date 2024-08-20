@@ -89,6 +89,55 @@ EXTISM_IMPORT_ENV("load_u64")
 extern uint64_t load_u64(const ExtismPointer);
 }; // namespace imports
 
+template <typename T> class Handle : public imports::RawHandle {
+  uint64_t byte_size;
+
+public:
+  Handle(RawHandle _handle)
+      : RawHandle(_handle), byte_size(imports::length(handle)) {}
+  Handle(RawHandle handle, uint64_t byte_size)
+      : RawHandle(handle), byte_size(byte_size) {}
+  static std::optional<Handle<T>> from(std::span<const T> src);
+  bool load(std::span<T> dest, const uint64_t src_offset = 0) const;
+  bool store(std::span<const T> srca, const uint64_t dest_offset = 0);
+  std::optional<std::string> string(const uint64_t src_offset = 0,
+                                    const size_t max = SIZE_MAX) const;
+  std::optional<std::vector<T>> vec(const uint64_t src_offset = 0,
+                                    const size_t max = SIZE_MAX) const;
+  std::optional<T> get_stack(const uint64_t src_offset = 0);
+  std::unique_ptr<T> get(const uint64_t src_offset = 0);
+  uint64_t size_bytes() const { return byte_size; }
+};
+
+template <typename T> class OwnedHandle : public Handle<T> {
+public:
+  OwnedHandle(Handle<T> handle) : Handle<T>(handle) {}
+  OwnedHandle(OwnedHandle<T> &&other) : Handle<T>(std::move(other)) {
+    other.handle = 0;
+  }
+  OwnedHandle<T> &operator=(OwnedHandle<T> &&other) {
+    if (this != &other) {
+      if (this->handle) {
+        imports::free(this->handle);
+      }
+      Handle<T>::operator=(std::move(other));
+      other.handle = 0;
+    }
+    return *this;
+  }
+  static std::optional<OwnedHandle<T>> from(std::span<const T> src);
+  ~OwnedHandle() {
+    if (this->handle) {
+      imports::free(this->handle);
+    }
+  }
+  Handle<T> to_unowned() {
+    Handle<T> unowned(std::move(*this));
+    this->handle = 0;
+    return unowned;
+  }
+};
+
 template <typename T>
 std::vector<T> input_vec(const uint64_t src_offset = 0,
                          const size_t max = SIZE_MAX);
@@ -130,52 +179,12 @@ typedef enum {
 
 bool log(const std::string_view message, const Log level);
 
+template <typename T> void output(const Handle<T> &handle);
+template <typename T> void output(const OwnedHandle<T> &handle) = delete;
+template <typename T> void output(OwnedHandle<T> &&handle);
 template <typename T> bool output(std::span<const T> data);
 bool output(std::string_view data);
 template <typename T> bool output_type(const T &data);
-
-template <typename T> class Handle : public imports::RawHandle {
-  uint64_t byte_size;
-
-public:
-  Handle(RawHandle _handle)
-      : RawHandle(_handle), byte_size(imports::length(handle)) {}
-  Handle(RawHandle handle, uint64_t byte_size)
-      : RawHandle(handle), byte_size(byte_size) {}
-  static std::optional<Handle<T>> from(std::span<const T> src);
-  bool load(std::span<T> dest, const uint64_t src_offset = 0) const;
-  bool store(std::span<const T> srca, const uint64_t dest_offset = 0);
-  std::optional<std::string> string(const uint64_t src_offset = 0,
-                                    const size_t max = SIZE_MAX) const;
-  std::optional<std::vector<T>> vec(const uint64_t src_offset = 0,
-                                    const size_t max = SIZE_MAX) const;
-  std::optional<T> get_stack(const uint64_t src_offset = 0);
-  std::unique_ptr<T> get(const uint64_t src_offset = 0);
-};
-
-template <typename T> class OwnedHandle : public Handle<T> {
-public:
-  OwnedHandle(Handle<T> handle) : Handle<T>(handle) {}
-  OwnedHandle(OwnedHandle<T> &&other) : Handle<T>(std::move(other)) {
-    other.handle = 0;
-  }
-  OwnedHandle<T> &operator=(OwnedHandle<T> &&other) {
-    if (this != &other) {
-      if (this->handle) {
-        imports::free(this->handle);
-      }
-      Handle<T>::operator=(std::move(other));
-      other.handle = 0;
-    }
-    return *this;
-  }
-  static std::optional<OwnedHandle<T>> from(std::span<const T> src);
-  ~OwnedHandle() {
-    if (this->handle) {
-      imports::free(this->handle);
-    }
-  }
-};
 
 template <typename T> class HttpResponse {
   OwnedHandle<T> handle;
@@ -343,6 +352,14 @@ template <typename T> T input_stack(const uint64_t src_offset) {
 template <typename T> std::unique_ptr<T> input(const uint64_t src_offset) {
   Handle<T> handle(imports::input());
   return handle.get();
+}
+
+template <typename T> void output(const Handle<T> &handle) {
+  imports::output_set(handle, handle.size_bytes());
+}
+
+template <typename T> void output(OwnedHandle<T> &&handle) {
+  output(handle.to_unowned());
 }
 
 template <typename T> bool output(std::span<const T> data) {
