@@ -145,11 +145,11 @@ public:
   static std::optional<Handle<T>> from(std::span<const T> src);
   bool load(std::span<T> dest, const uint64_t src_offset = 0) const;
   bool store(std::span<const T> srca, const uint64_t dest_offset = 0);
-  std::string string(const uint64_t src_offset = 0,
-                     const size_t max = SIZE_MAX) const;
-  std::vector<T> vec(const uint64_t src_offset = 0,
-                     const size_t max = SIZE_MAX) const;
-  T get_stack(const uint64_t src_offset = 0);
+  std::optional<std::string> string(const uint64_t src_offset = 0,
+                                    const size_t max = SIZE_MAX) const;
+  std::optional<std::vector<T>> vec(const uint64_t src_offset = 0,
+                                    const size_t max = SIZE_MAX) const;
+  std::optional<T> get_stack(const uint64_t src_offset = 0);
   std::unique_ptr<T> get(const uint64_t src_offset = 0);
 };
 
@@ -185,13 +185,15 @@ public:
   HttpResponse(OwnedHandle<T> &&handle)
       : handle(std::move(handle)), status(imports::http_status_code()) {}
 
-  std::vector<T> body_vec() const;
-  std::string body_string() const;
+  std::optional<std::vector<T>> body_vec(const uint64_t src_offset = 0,
+                                         const size_t max = SIZE_MAX) const;
+  std::optional<std::string> body_string(const uint64_t src_offset = 0,
+                                         const size_t max = SIZE_MAX) const;
 };
 
 template <typename T, typename U>
 std::optional<HttpResponse<T>> http_request(const std::string_view req,
-                                            const std::span<const U> body);
+                                            const std::span<const U> body = {});
 
 template <typename T>
 std::optional<HttpResponse<T>> http_request(const std::string_view req,
@@ -255,23 +257,22 @@ bool Handle<T>::store(std::span<const T> src_span, const uint64_t dest_offset) {
 }
 
 template <typename T>
-std::vector<T> Handle<T>::vec(const uint64_t src_offset,
-                              const size_t max_bytes) const {
-  if (src_offset >= byte_size) {
-    return {};
-  }
+std::optional<std::vector<T>> Handle<T>::vec(const uint64_t src_offset,
+                                             const size_t max_bytes) const {
   const uint64_t bufsize =
       std::min<uint64_t>(byte_size - src_offset, max_bytes);
   std::vector<T> vec(bufsize / sizeof(T));
-  load(vec, src_offset);
+  if (!load(vec, src_offset)) {
+    return std::nullopt;
+  }
   return vec;
 }
 
 template <typename T>
-std::string Handle<T>::string(const uint64_t src_offset,
-                              const size_t max) const {
-  if (src_offset >= byte_size) {
-    return "";
+std::optional<std::string> Handle<T>::string(const uint64_t src_offset,
+                                             const size_t max) const {
+  if (src_offset > byte_size) {
+    return std::nullopt;
   }
   std::string output;
   const uint64_t bufsize = std::min<uint64_t>(byte_size - src_offset, max);
@@ -283,22 +284,21 @@ std::string Handle<T>::string(const uint64_t src_offset,
   return output;
 }
 
-template <typename T> T Handle<T>::get_stack(const uint64_t src_offset) {
-  if ((src_offset + sizeof(T)) > byte_size) {
-    return {};
-  }
+template <typename T>
+std::optional<T> Handle<T>::get_stack(const uint64_t src_offset) {
   T t;
-  load(std::span<T, 1>{std::addressof(t), 1}, src_offset);
+  if (!load(std::span<T, 1>{std::addressof(t), 1}, src_offset)) {
+    return std::nullopt;
+  }
   return t;
 }
 
 template <typename T>
 std::unique_ptr<T> Handle<T>::get(const uint64_t src_offset) {
-  if ((src_offset + sizeof(T)) > byte_size) {
+  auto ptr = std::make_unique<T>();
+  if (!load(std::span<T, 1>{ptr.get(), 1}, src_offset)) {
     return nullptr;
   }
-  auto ptr = std::make_unique<T>();
-  load(std::span<T, 1>{ptr.get(), 1}, src_offset);
   return ptr;
 }
 
@@ -327,17 +327,17 @@ std::optional<OwnedHandle<T>> OwnedHandle<T>::from(std::span<const T> src) {
 template <typename T>
 std::vector<T> input_vec(const uint64_t src_offset, const size_t max) {
   Handle<T> handle(imports::input());
-  return handle.vec(src_offset, max);
+  return *handle.vec(src_offset, max);
 }
 
 std::string input_string(const uint64_t src_offset, const size_t max) {
   Handle<char> handle(imports::input());
-  return handle.string(src_offset, max);
+  return *handle.string(src_offset, max);
 }
 
 template <typename T> T input_stack(const uint64_t src_offset) {
   Handle<T> handle(imports::input());
-  return handle.get_stack();
+  return *handle.get_stack();
 }
 
 template <typename T> std::unique_ptr<T> input(const uint64_t src_offset) {
@@ -457,12 +457,17 @@ bool log_debug(const std::string_view message) { return log(message, Debug); }
 bool log_warn(const std::string_view message) { return log(message, Warn); }
 bool log_error(const std::string_view message) { return log(message, Error); }
 
-template <typename T> std::vector<T> HttpResponse<T>::body_vec() const {
-  return handle.vec();
+template <typename T>
+std::optional<std::vector<T>>
+HttpResponse<T>::body_vec(const uint64_t src_offset, const size_t max) const {
+  return handle.vec(src_offset, max);
 }
 
-template <typename T> std::string HttpResponse<T>::body_string() const {
-  return handle.string();
+template <typename T>
+std::optional<std::string>
+HttpResponse<T>::body_string(const uint64_t src_offset,
+                             const size_t max) const {
+  return handle.string(src_offset, max);
 }
 
 template <typename T, typename U>
