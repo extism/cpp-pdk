@@ -103,16 +103,18 @@ std::optional<std::string> config_string(const std::string_view key,
                                          const uint64_t offset = 0,
                                          const size_t max = SIZE_MAX);
 
-std::vector<std::byte> var_bytes(const std::string_view name,
-                                 const uint64_t offset = 0,
-                                 const size_t max = SIZE_MAX);
+template <typename T>
+std::optional<std::vector<T>> var_vec(const std::string_view name,
+                                      const uint64_t offset = 0,
+                                      const size_t max = SIZE_MAX);
 
-std::string var_string(const std::string_view name, const uint64_t offset = 0,
-                       const size_t max = SIZE_MAX);
+std::optional<std::string> var_string(const std::string_view name,
+                                      const uint64_t offset = 0,
+                                      const size_t max = SIZE_MAX);
 
-void var_set(const std::string_view name, const std::string_view value);
-
-void var_set(const std::string_view name, const std::span<std::byte> value);
+template <typename T>
+bool var_set(const std::string_view name, const std::span<T> value);
+bool var_set(const std::string_view name, const std::string_view value);
 
 bool log_info(const std::string_view message);
 bool log_debug(const std::string_view message);
@@ -142,7 +144,7 @@ public:
       : RawHandle(handle), byte_size(byte_size) {}
   static std::optional<Handle<T>> from(std::span<const T> src);
   bool load(std::span<T> dest, const uint64_t src_offset = 0) const;
-  bool store(std::span<const T> srca, const uint64_t dest_offset = 0) const;
+  bool store(std::span<const T> srca, const uint64_t dest_offset = 0);
   std::string string(const uint64_t src_offset = 0,
                      const size_t max = SIZE_MAX) const;
   std::vector<T> vec(const uint64_t src_offset = 0,
@@ -154,7 +156,19 @@ public:
 template <typename T> class OwnedHandle : public Handle<T> {
 public:
   OwnedHandle(Handle<T> handle) : Handle<T>(handle) {}
-  OwnedHandle(OwnedHandle<T> &&orig) : Handle<T>(orig) { orig.handle = 0; }
+  OwnedHandle(OwnedHandle<T> &&other) : Handle<T>(std::move(other)) {
+    other.handle = 0;
+  }
+  OwnedHandle<T> &operator=(OwnedHandle<T> &&other) {
+    if (this != &other) {
+      if (this->handle) {
+        imports::free(this->handle);
+      }
+      Handle<T>::operator=(std::move(other));
+      other.handle = 0;
+    }
+    return *this;
+  }
   static std::optional<OwnedHandle<T>> from(std::span<const T> src);
   ~OwnedHandle() {
     if (this->handle) {
@@ -164,24 +178,24 @@ public:
 };
 
 template <typename T> class HttpResponse {
-  Handle<std::byte> handle;
+  OwnedHandle<T> handle;
 
 public:
   const int32_t status;
-  HttpResponse(Handle<T> handle)
-      : handle(handle), status(imports::http_status_code()) {}
+  HttpResponse(OwnedHandle<T> &&handle)
+      : handle(std::move(handle)), status(imports::http_status_code()) {}
 
   std::vector<T> body_vec() const;
   std::string body_string() const;
 };
 
 template <typename T, typename U>
-HttpResponse<T> http_request(const std::string_view req,
-                             const std::span<U> body);
+std::optional<HttpResponse<T>> http_request(const std::string_view req,
+                                            const std::span<const U> body);
 
 template <typename T>
-HttpResponse<T> http_request(const std::string_view req,
-                             const std::string_view body);
+std::optional<HttpResponse<T>> http_request(const std::string_view req,
+                                            const std::string_view body = "");
 } // namespace extism
 
 #endif // extism_pdk_hpp
@@ -219,8 +233,7 @@ bool Handle<T>::load(std::span<T> dest_span, const uint64_t src_offset) const {
 }
 
 template <typename T>
-bool Handle<T>::store(std::span<const T> src_span,
-                      const uint64_t dest_offset) const {
+bool Handle<T>::store(std::span<const T> src_span, const uint64_t dest_offset) {
   if (dest_offset + src_span.size_bytes() > byte_size) {
     return false;
   }
@@ -292,7 +305,7 @@ std::unique_ptr<T> Handle<T>::get(const uint64_t src_offset) {
 template <typename T>
 std::optional<Handle<T>> Handle<T>::from(std::span<const T> src) {
   auto handle = imports::alloc(src.size_bytes());
-  if (!handle) {
+  if (!handle && src.size_bytes()) {
     return std::nullopt;
   }
   Handle<T> h(handle, src.size_bytes());
@@ -372,6 +385,49 @@ std::optional<std::string> config_string(const std::string_view key,
   return std::nullopt;
 }
 
+template <typename T>
+std::optional<std::vector<T>> var_vec(const std::string_view name,
+                                      const uint64_t offset, const size_t max) {
+  if (auto kh = OwnedHandle<char>::from(name)) {
+    auto rawvh = imports::var_get(*kh);
+    if (rawvh) {
+      OwnedHandle<T> vh(rawvh);
+      return vh.vec(offset, max);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> var_string(const std::string_view name,
+                                      const uint64_t offset, const size_t max) {
+  if (auto kh = OwnedHandle<char>::from(name)) {
+    auto rawvh = imports::var_get(*kh);
+    if (rawvh) {
+      OwnedHandle<char> vh(rawvh);
+      return vh.string(offset, max);
+    }
+  }
+  return std::nullopt;
+}
+
+template <typename T>
+bool var_set(const std::string_view name, const std::span<T> value) {
+  auto nh = OwnedHandle<const char>::from(name);
+  if (!nh) {
+    return false;
+  }
+  auto vh = OwnedHandle<T>::from(value);
+  if (!vh) {
+    return false;
+  }
+  imports::var_set(*nh, *vh);
+  return true;
+}
+
+bool var_set(const std::string_view name, const std::string_view value) {
+  return var_set<const char>(name, value);
+}
+
 // Write to Extism log
 bool log(const std::string_view message, const Log level) {
   auto buf = OwnedHandle<const char>::from(message);
@@ -400,6 +456,38 @@ bool log_debug(const std::string_view message) { return log(message, Debug); }
 
 bool log_warn(const std::string_view message) { return log(message, Warn); }
 bool log_error(const std::string_view message) { return log(message, Error); }
+
+template <typename T> std::vector<T> HttpResponse<T>::body_vec() const {
+  return handle.vec();
+}
+
+template <typename T> std::string HttpResponse<T>::body_string() const {
+  return handle.string();
+}
+
+template <typename T, typename U>
+std::optional<HttpResponse<T>> http_request(const std::string_view req,
+                                            const std::span<const U> body) {
+  auto reqh = OwnedHandle<char>::from(req);
+  if (!reqh) {
+    return std::nullopt;
+  }
+  auto bh = OwnedHandle<U>::from(body);
+  if (!bh) {
+    return std::nullopt;
+  }
+  auto rawh = imports::http_request(*reqh, 0);
+  if (!rawh) {
+    return std::nullopt;
+  }
+  return HttpResponse<T>(Handle<T>(rawh));
+}
+
+template <typename T>
+std::optional<HttpResponse<T>> http_request(const std::string_view req,
+                                            const std::string_view body) {
+  return http_request<T, const char>(req, std::span{body});
+}
 
 } // namespace extism
 
