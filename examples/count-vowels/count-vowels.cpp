@@ -8,7 +8,7 @@ inline unsigned is_vowel(char ch) {
 
 int32_t EXTISM_EXPORTED_FUNCTION(count_vowels) {
   uint64_t count = 0;
-  for (auto &ch : extism::input_string()) {
+  for (auto &ch : extism::input().string()) {
     count += is_vowel(ch);
   }
 

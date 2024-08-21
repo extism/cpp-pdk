@@ -19,7 +19,7 @@ int32_t EXTISM_EXPORTED_FUNCTION(count_vowels) {
 
   char out[128];
   int n = snprintf(out, 128, "{\"count\": %lld}", count);
-  auto hello_input = extism::OwnedHandle<char>::from(out);
+  auto hello_input = extism::UniqueHandle<char>::from(out);
   if (!hello_input) {
     return 1;
   }
@@ -27,6 +27,6 @@ int32_t EXTISM_EXPORTED_FUNCTION(count_vowels) {
   if (!hello_result) {
     return 2;
   }
-  extism::output<char>(hello_result);
+  extism::output<char>(extism::UniqueHandle<char>(hello_result));
   return 0;
 }

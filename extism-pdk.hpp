@@ -99,23 +99,25 @@ public:
       : RawHandle(handle), byte_size(byte_size) {}
   static std::optional<Handle<T>> from(std::span<const T> src);
   bool load(std::span<T> dest, const uint64_t src_offset = 0) const;
-  bool store(std::span<const T> srca, const uint64_t dest_offset = 0);
-  std::optional<std::string> string(const uint64_t src_offset = 0,
+  std::optional<std::string> string(const uint64_t src_offset,
                                     const size_t max = SIZE_MAX) const;
-  std::optional<std::vector<T>> vec(const uint64_t src_offset = 0,
+  std::string string() const { return *string(0); }
+  std::optional<std::vector<T>> vec(const uint64_t src_offset,
                                     const size_t max = SIZE_MAX) const;
-  std::optional<T> get_stack(const uint64_t src_offset = 0);
-  std::unique_ptr<T> get(const uint64_t src_offset = 0);
+  std::vector<T> vec() const { return *vec(0); }
+  std::optional<T> get_stack(const uint64_t src_offset = 0) const;
+  std::unique_ptr<T> get(const uint64_t src_offset = 0) const;
   uint64_t size_bytes() const { return byte_size; }
+  bool store(std::span<const T> srca, const uint64_t dest_offset = 0);
 };
 
-template <typename T> class OwnedHandle : public Handle<T> {
+template <typename T> class UniqueHandle : public Handle<T> {
 public:
-  OwnedHandle(Handle<T> handle) : Handle<T>(handle) {}
-  OwnedHandle(OwnedHandle<T> &&other) : Handle<T>(std::move(other)) {
+  explicit UniqueHandle(Handle<T> handle) : Handle<T>(handle) {}
+  UniqueHandle(UniqueHandle<T> &&other) : Handle<T>(std::move(other)) {
     other.handle = 0;
   }
-  OwnedHandle<T> &operator=(OwnedHandle<T> &&other) {
+  UniqueHandle<T> &operator=(UniqueHandle<T> &&other) {
     if (this != &other) {
       if (this->handle) {
         imports::free(this->handle);
@@ -125,19 +127,20 @@ public:
     }
     return *this;
   }
-  static std::optional<OwnedHandle<T>> from(std::span<const T> src);
-  ~OwnedHandle() {
+  static std::optional<UniqueHandle<T>> from(std::span<const T> src);
+  ~UniqueHandle() {
     if (this->handle) {
       imports::free(this->handle);
     }
   }
-  Handle<T> to_unowned() {
+  Handle<T> release() {
     Handle<T> unowned(std::move(*this));
     this->handle = 0;
     return unowned;
   }
 };
 
+template <typename T = char> const Handle<T> input();
 template <typename T>
 std::vector<T> input_vec(const uint64_t src_offset = 0,
                          const size_t max = SIZE_MAX);
@@ -148,10 +151,14 @@ template <typename T> std::unique_ptr<T> input(const uint64_t src_offset = 0);
 
 bool error_set(const std::string_view s);
 
+template <typename T = char>
+std::optional<const UniqueHandle<T>> config(const std::string_view key);
 std::optional<std::string> config_string(const std::string_view key,
                                          const uint64_t offset = 0,
                                          const size_t max = SIZE_MAX);
 
+template <typename T = char>
+std::optional<const UniqueHandle<T>> var(const std::string_view name);
 template <typename T>
 std::optional<std::vector<T>> var_vec(const std::string_view name,
                                       const uint64_t offset = 0,
@@ -161,6 +168,7 @@ std::optional<std::string> var_string(const std::string_view name,
                                       const uint64_t offset = 0,
                                       const size_t max = SIZE_MAX);
 
+bool var_set(const std::string_view name, const imports::RawHandle value);
 template <typename T>
 bool var_set(const std::string_view name, const std::span<T> value);
 bool var_set(const std::string_view name, const std::string_view value);
@@ -179,21 +187,20 @@ typedef enum {
 
 bool log(const std::string_view message, const Log level);
 
-template <typename T> void output(const Handle<T> &handle);
-template <typename T> void output(const OwnedHandle<T> &handle) = delete;
-template <typename T> void output(OwnedHandle<T> &&handle);
+template <typename T> void output(UniqueHandle<T> handle);
 template <typename T> bool output(std::span<const T> data);
 bool output(std::string_view data);
 template <typename T> bool output_type(const T &data);
 
 template <typename T> class HttpResponse {
-  OwnedHandle<T> handle;
+  UniqueHandle<T> handle;
 
 public:
   const int32_t status;
-  HttpResponse(OwnedHandle<T> &&handle)
+  HttpResponse(UniqueHandle<T> handle)
       : handle(std::move(handle)), status(imports::http_status_code()) {}
 
+  const UniqueHandle<T> &body() { return handle; }
   std::optional<std::vector<T>> body_vec(const uint64_t src_offset = 0,
                                          const size_t max = SIZE_MAX) const;
   std::optional<std::string> body_string(const uint64_t src_offset = 0,
@@ -294,7 +301,7 @@ std::optional<std::string> Handle<T>::string(const uint64_t src_offset,
 }
 
 template <typename T>
-std::optional<T> Handle<T>::get_stack(const uint64_t src_offset) {
+std::optional<T> Handle<T>::get_stack(const uint64_t src_offset) const {
   T t;
   if (!load(std::span<T, 1>{std::addressof(t), 1}, src_offset)) {
     return std::nullopt;
@@ -303,7 +310,7 @@ std::optional<T> Handle<T>::get_stack(const uint64_t src_offset) {
 }
 
 template <typename T>
-std::unique_ptr<T> Handle<T>::get(const uint64_t src_offset) {
+std::unique_ptr<T> Handle<T>::get(const uint64_t src_offset) const {
   auto ptr = std::make_unique<T>();
   if (!load(std::span<T, 1>{ptr.get(), 1}, src_offset)) {
     return nullptr;
@@ -326,11 +333,15 @@ std::optional<Handle<T>> Handle<T>::from(std::span<const T> src) {
 }
 
 template <typename T>
-std::optional<OwnedHandle<T>> OwnedHandle<T>::from(std::span<const T> src) {
+std::optional<UniqueHandle<T>> UniqueHandle<T>::from(std::span<const T> src) {
   if (auto h = Handle<T>::from(src)) {
-    return OwnedHandle<T>(*h);
+    return UniqueHandle<T>(*h);
   }
   return std::nullopt;
+}
+
+template <typename T> const Handle<T> input() {
+  return Handle<T>(imports::input());
 }
 
 template <typename T>
@@ -354,12 +365,9 @@ template <typename T> std::unique_ptr<T> input(const uint64_t src_offset) {
   return handle.get();
 }
 
-template <typename T> void output(const Handle<T> &handle) {
+template <typename T> void output(UniqueHandle<T> unique_handle) {
+  auto handle = unique_handle.release();
   imports::output_set(handle, handle.size_bytes());
-}
-
-template <typename T> void output(OwnedHandle<T> &&handle) {
-  output(handle.to_unowned());
 }
 
 template <typename T> bool output(std::span<const T> data) {
@@ -389,14 +397,36 @@ bool error_set(const std::string_view s) {
   return false;
 }
 
+template <typename T>
+std::optional<const UniqueHandle<T>> config(const std::string_view key) {
+  if (auto kh = UniqueHandle<char>::from(key)) {
+    auto rawvh = imports::config_get(*kh);
+    if (rawvh) {
+      return UniqueHandle<T>(rawvh);
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<std::string> config_string(const std::string_view key,
                                          const uint64_t offset,
                                          const size_t max) {
-  if (auto kh = OwnedHandle<char>::from(key)) {
+  if (auto kh = UniqueHandle<char>::from(key)) {
     auto rawvh = imports::config_get(*kh);
     if (rawvh) {
-      OwnedHandle<char> vh(rawvh);
+      UniqueHandle<char> vh(rawvh);
       return vh.string(offset, max);
+    }
+  }
+  return std::nullopt;
+}
+
+template <typename T>
+std::optional<const UniqueHandle<T>> var(const std::string_view name) {
+  if (auto kh = UniqueHandle<char>::from(name)) {
+    auto rawvh = imports::var_get(*kh);
+    if (rawvh) {
+      return UniqueHandle<T>(rawvh);
     }
   }
   return std::nullopt;
@@ -405,10 +435,10 @@ std::optional<std::string> config_string(const std::string_view key,
 template <typename T>
 std::optional<std::vector<T>> var_vec(const std::string_view name,
                                       const uint64_t offset, const size_t max) {
-  if (auto kh = OwnedHandle<char>::from(name)) {
+  if (auto kh = UniqueHandle<char>::from(name)) {
     auto rawvh = imports::var_get(*kh);
     if (rawvh) {
-      OwnedHandle<T> vh(rawvh);
+      UniqueHandle<T> vh(rawvh);
       return vh.vec(offset, max);
     }
   }
@@ -417,23 +447,32 @@ std::optional<std::vector<T>> var_vec(const std::string_view name,
 
 std::optional<std::string> var_string(const std::string_view name,
                                       const uint64_t offset, const size_t max) {
-  if (auto kh = OwnedHandle<char>::from(name)) {
+  if (auto kh = UniqueHandle<char>::from(name)) {
     auto rawvh = imports::var_get(*kh);
     if (rawvh) {
-      OwnedHandle<char> vh(rawvh);
+      UniqueHandle<char> vh(rawvh);
       return vh.string(offset, max);
     }
   }
   return std::nullopt;
 }
 
-template <typename T>
-bool var_set(const std::string_view name, const std::span<T> value) {
-  auto nh = OwnedHandle<const char>::from(name);
+bool var_set(const std::string_view name, const imports::RawHandle value) {
+  auto nh = UniqueHandle<const char>::from(name);
   if (!nh) {
     return false;
   }
-  auto vh = OwnedHandle<T>::from(value);
+  imports::var_set(*nh, value);
+  return true;
+}
+
+template <typename T>
+bool var_set(const std::string_view name, const std::span<T> value) {
+  auto nh = UniqueHandle<const char>::from(name);
+  if (!nh) {
+    return false;
+  }
+  auto vh = UniqueHandle<T>::from(value);
   if (!vh) {
     return false;
   }
@@ -447,7 +486,7 @@ bool var_set(const std::string_view name, const std::string_view value) {
 
 // Write to Extism log
 bool log(const std::string_view message, const Log level) {
-  auto buf = OwnedHandle<const char>::from(message);
+  auto buf = UniqueHandle<const char>::from(message);
   if (!buf) {
     return false;
   }
@@ -490,11 +529,11 @@ HttpResponse<T>::body_string(const uint64_t src_offset,
 template <typename T, typename U>
 std::optional<HttpResponse<T>> http_request(const std::string_view req,
                                             const std::span<const U> body) {
-  auto reqh = OwnedHandle<char>::from(req);
+  auto reqh = UniqueHandle<char>::from(req);
   if (!reqh) {
     return std::nullopt;
   }
-  auto bh = OwnedHandle<U>::from(body);
+  auto bh = UniqueHandle<U>::from(body);
   if (!bh) {
     return std::nullopt;
   }
@@ -502,7 +541,7 @@ std::optional<HttpResponse<T>> http_request(const std::string_view req,
   if (!rawh) {
     return std::nullopt;
   }
-  return HttpResponse<T>(Handle<T>(rawh));
+  return HttpResponse<T>(UniqueHandle<T>(rawh));
 }
 
 template <typename T>
