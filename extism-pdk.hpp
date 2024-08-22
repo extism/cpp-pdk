@@ -141,32 +141,14 @@ public:
 };
 
 template <typename T = char> const Handle<T> input();
-template <typename T>
-std::vector<T> input_vec(const uint64_t src_offset = 0,
-                         const size_t max = SIZE_MAX);
-std::string input_string(const uint64_t src_offset = 0,
-                         const size_t max = SIZE_MAX);
-template <typename T> T input_stack(const uint64_t src_offset = 0);
-template <typename T> std::unique_ptr<T> input(const uint64_t src_offset = 0);
 
 bool error_set(const std::string_view s);
 
 template <typename T = char>
 std::optional<const UniqueHandle<T>> config(const std::string_view key);
-std::optional<std::string> config_string(const std::string_view key,
-                                         const uint64_t offset = 0,
-                                         const size_t max = SIZE_MAX);
 
 template <typename T = char>
 std::optional<const UniqueHandle<T>> var(const std::string_view name);
-template <typename T>
-std::optional<std::vector<T>> var_vec(const std::string_view name,
-                                      const uint64_t offset = 0,
-                                      const size_t max = SIZE_MAX);
-
-std::optional<std::string> var_string(const std::string_view name,
-                                      const uint64_t offset = 0,
-                                      const size_t max = SIZE_MAX);
 
 bool var_set(const std::string_view name, const imports::RawHandle value);
 template <typename T>
@@ -201,10 +183,6 @@ public:
       : handle(std::move(handle)), status(imports::http_status_code()) {}
 
   const UniqueHandle<T> &body() { return handle; }
-  std::optional<std::vector<T>> body_vec(const uint64_t src_offset = 0,
-                                         const size_t max = SIZE_MAX) const;
-  std::optional<std::string> body_string(const uint64_t src_offset = 0,
-                                         const size_t max = SIZE_MAX) const;
 };
 
 template <typename T, typename U>
@@ -344,27 +322,6 @@ template <typename T> const Handle<T> input() {
   return Handle<T>(imports::input());
 }
 
-template <typename T>
-std::vector<T> input_vec(const uint64_t src_offset, const size_t max) {
-  Handle<T> handle(imports::input());
-  return *handle.vec(src_offset, max);
-}
-
-std::string input_string(const uint64_t src_offset, const size_t max) {
-  Handle<char> handle(imports::input());
-  return *handle.string(src_offset, max);
-}
-
-template <typename T> T input_stack(const uint64_t src_offset) {
-  Handle<T> handle(imports::input());
-  return *handle.get_stack();
-}
-
-template <typename T> std::unique_ptr<T> input(const uint64_t src_offset) {
-  Handle<T> handle(imports::input());
-  return handle.get();
-}
-
 template <typename T> void output(UniqueHandle<T> unique_handle) {
   auto handle = unique_handle.release();
   imports::output_set(handle, handle.size_bytes());
@@ -408,50 +365,12 @@ std::optional<const UniqueHandle<T>> config(const std::string_view key) {
   return std::nullopt;
 }
 
-std::optional<std::string> config_string(const std::string_view key,
-                                         const uint64_t offset,
-                                         const size_t max) {
-  if (auto kh = UniqueHandle<char>::from(key)) {
-    auto rawvh = imports::config_get(*kh);
-    if (rawvh) {
-      UniqueHandle<char> vh(rawvh);
-      return vh.string(offset, max);
-    }
-  }
-  return std::nullopt;
-}
-
 template <typename T>
 std::optional<const UniqueHandle<T>> var(const std::string_view name) {
   if (auto kh = UniqueHandle<char>::from(name)) {
     auto rawvh = imports::var_get(*kh);
     if (rawvh) {
       return UniqueHandle<T>(rawvh);
-    }
-  }
-  return std::nullopt;
-}
-
-template <typename T>
-std::optional<std::vector<T>> var_vec(const std::string_view name,
-                                      const uint64_t offset, const size_t max) {
-  if (auto kh = UniqueHandle<char>::from(name)) {
-    auto rawvh = imports::var_get(*kh);
-    if (rawvh) {
-      UniqueHandle<T> vh(rawvh);
-      return vh.vec(offset, max);
-    }
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> var_string(const std::string_view name,
-                                      const uint64_t offset, const size_t max) {
-  if (auto kh = UniqueHandle<char>::from(name)) {
-    auto rawvh = imports::var_get(*kh);
-    if (rawvh) {
-      UniqueHandle<char> vh(rawvh);
-      return vh.string(offset, max);
     }
   }
   return std::nullopt;
@@ -512,19 +431,6 @@ bool log_debug(const std::string_view message) { return log(message, Debug); }
 
 bool log_warn(const std::string_view message) { return log(message, Warn); }
 bool log_error(const std::string_view message) { return log(message, Error); }
-
-template <typename T>
-std::optional<std::vector<T>>
-HttpResponse<T>::body_vec(const uint64_t src_offset, const size_t max) const {
-  return handle.vec(src_offset, max);
-}
-
-template <typename T>
-std::optional<std::string>
-HttpResponse<T>::body_string(const uint64_t src_offset,
-                             const size_t max) const {
-  return handle.string(src_offset, max);
-}
 
 template <typename T, typename U>
 std::optional<HttpResponse<T>> http_request(const std::string_view req,
