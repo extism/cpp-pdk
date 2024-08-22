@@ -21,6 +21,7 @@ jobs:
 
       - name: Install WASI SDK
         run: |
+          uname -m
           bash install-wasi-sdk.sh
           echo '$WASI_SDK_PATH="'$(pwd)'"/wasi-sdk' >> $GITHUB_ENV
 
