@@ -192,22 +192,8 @@ std::optional<HttpResponse<T>> http_request(const std::string_view req,
 template <typename T>
 std::optional<HttpResponse<T>> http_request(const std::string_view req,
                                             const std::string_view body = "");
-} // namespace extism
 
-#endif // extism_pdk_hpp
-
-// avoid greying out the implementation section
-#if defined(Q_CREATOR_RUN) || defined(__INTELLISENSE__) ||                     \
-    defined(_CDT_PARSER__)
-#define EXTISM_CPP_IMPLEMENTATION
-#endif
-
-#ifdef EXTISM_CPP_IMPLEMENTATION
-#ifndef extism_pdk_cpp
-#define extism_pdk_cpp
-
-namespace extism {
-
+// template implementation
 template <typename T>
 bool Handle<T>::load(std::span<T> dest_span, const uint64_t src_offset) const {
   if (src_offset + dest_span.size_bytes() > byte_size) {
@@ -335,20 +321,10 @@ template <typename T> bool output(std::span<const T> data) {
   return false;
 }
 
-bool output(std::string_view data) { return output<const char>(data); }
-
 template <typename T> bool output_type(const T &data) {
   if (auto h = Handle<const T>::from(
           std::span<const T, 1>{std::addressof(data), 1})) {
     imports::output_set(*h, sizeof(data));
-    return true;
-  }
-  return false;
-}
-
-bool error_set(const std::string_view s) {
-  if (auto h = Handle<const char>::from(s)) {
-    imports::error_set(*h);
     return true;
   }
   return false;
@@ -376,15 +352,6 @@ std::optional<const UniqueHandle<T>> var(const std::string_view name) {
   return std::nullopt;
 }
 
-bool var_set(const std::string_view name, const imports::RawHandle value) {
-  auto nh = UniqueHandle<const char>::from(name);
-  if (!nh) {
-    return false;
-  }
-  imports::var_set(*nh, value);
-  return true;
-}
-
 template <typename T>
 bool var_set(const std::string_view name, const std::span<T> value) {
   auto nh = UniqueHandle<const char>::from(name);
@@ -396,6 +363,66 @@ bool var_set(const std::string_view name, const std::span<T> value) {
     return false;
   }
   imports::var_set(*nh, *vh);
+  return true;
+}
+
+template <typename T, typename U>
+std::optional<HttpResponse<T>> http_request(const std::string_view req,
+                                            const std::span<const U> body) {
+  auto reqh = UniqueHandle<char>::from(req);
+  if (!reqh) {
+    return std::nullopt;
+  }
+  auto bh = UniqueHandle<U>::from(body);
+  if (!bh) {
+    return std::nullopt;
+  }
+  auto rawh = imports::http_request(*reqh, 0);
+  if (!rawh) {
+    return std::nullopt;
+  }
+  return HttpResponse<T>(UniqueHandle<T>(rawh));
+}
+
+template <typename T>
+std::optional<HttpResponse<T>> http_request(const std::string_view req,
+                                            const std::string_view body) {
+  return http_request<T, const char>(req, std::span{body});
+}
+
+// end template implementation
+} // namespace extism
+
+#endif // extism_pdk_hpp
+
+// avoid greying out the implementation section
+#if defined(Q_CREATOR_RUN) || defined(__INTELLISENSE__) ||                     \
+    defined(_CDT_PARSER__)
+#define EXTISM_CPP_IMPLEMENTATION
+#endif
+
+#ifdef EXTISM_CPP_IMPLEMENTATION
+#ifndef extism_pdk_cpp
+#define extism_pdk_cpp
+
+namespace extism {
+
+bool output(std::string_view data) { return output<const char>(data); }
+
+bool error_set(const std::string_view s) {
+  if (auto h = Handle<const char>::from(s)) {
+    imports::error_set(*h);
+    return true;
+  }
+  return false;
+}
+
+bool var_set(const std::string_view name, const imports::RawHandle value) {
+  auto nh = UniqueHandle<const char>::from(name);
+  if (!nh) {
+    return false;
+  }
+  imports::var_set(*nh, value);
   return true;
 }
 
@@ -431,30 +458,6 @@ bool log_debug(const std::string_view message) { return log(message, Debug); }
 
 bool log_warn(const std::string_view message) { return log(message, Warn); }
 bool log_error(const std::string_view message) { return log(message, Error); }
-
-template <typename T, typename U>
-std::optional<HttpResponse<T>> http_request(const std::string_view req,
-                                            const std::span<const U> body) {
-  auto reqh = UniqueHandle<char>::from(req);
-  if (!reqh) {
-    return std::nullopt;
-  }
-  auto bh = UniqueHandle<U>::from(body);
-  if (!bh) {
-    return std::nullopt;
-  }
-  auto rawh = imports::http_request(*reqh, 0);
-  if (!rawh) {
-    return std::nullopt;
-  }
-  return HttpResponse<T>(UniqueHandle<T>(rawh));
-}
-
-template <typename T>
-std::optional<HttpResponse<T>> http_request(const std::string_view req,
-                                            const std::string_view body) {
-  return http_request<T, const char>(req, std::span{body});
-}
 
 } // namespace extism
 
