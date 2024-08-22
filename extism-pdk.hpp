@@ -154,6 +154,8 @@ bool var_set(const std::string_view name, const imports::RawHandle value);
 template <typename T>
 bool var_set(const std::string_view name, const std::span<T> value);
 bool var_set(const std::string_view name, const std::string_view value);
+template <typename T>
+bool var_set_type(const std::string_view name, const T &data);
 
 bool log_info(const std::string_view message);
 bool log_debug(const std::string_view message);
@@ -239,6 +241,9 @@ bool Handle<T>::store(std::span<const T> src_span, const uint64_t dest_offset) {
 template <typename T>
 std::optional<std::vector<T>> Handle<T>::vec(const uint64_t src_offset,
                                              const size_t max_bytes) const {
+  if (src_offset > byte_size) {
+    return std::nullopt;
+  }
   const uint64_t bufsize =
       std::min<uint64_t>(byte_size - src_offset, max_bytes);
   std::vector<T> vec(bufsize / sizeof(T));
@@ -364,6 +369,20 @@ bool var_set(const std::string_view name, const std::span<T> value) {
   }
   imports::var_set(*nh, *vh);
   return true;
+}
+
+template <typename T>
+bool var_set_type(const std::string_view name, const T &data) {
+  auto nh = UniqueHandle<const char>::from(name);
+  if (!nh) {
+    return false;
+  }
+  if (auto h = UniqueHandle<const T>::from(
+          std::span<const T, 1>{std::addressof(data), 1})) {
+    imports::var_set(*nh, *h);
+    return true;
+  }
+  return false;
 }
 
 template <typename T, typename U>
