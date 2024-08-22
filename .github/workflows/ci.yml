@@ -1,0 +1,36 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-example:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: ./.github/actions/libextism
+
+      - name: Install WASI SDK
+        run: |
+          bash install-wasi-sdk.sh
+          echo '$WASI_SDK_PATH="'$(pwd)'"/wasi-sdk' >> $GITHUB_ENV
+
+      - name: Example
+        run: |
+          cd examples/count-vowels
+          TEST=$(make run)
+          echo $TEST | grep '"count": 4'
+
+          
+      - name: Tests
+        if: matrix.os != 'macos-latest'
+        run: |
+          cd tests
+          make test
