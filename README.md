@@ -37,34 +37,6 @@ Compile:
 
 * `-mexec-model=reactor` as we're building a [reactor](https://dylibso.com/blog/wasi-command-reactor/) module - exporting functions, not building a [command](https://dylibso.com/blog/wasi-command-reactor/) program.
 
-## Exports (details)
-
-The `EXTISM_EXPORTED_FUNCTION` macro is not essential to create a plugin function and export it to the host. You may instead write a function and then export it when linking. For example, the first example may have the following signature instead:
-
-```c
-int32_t greet(void)
-```
-
-Then, it can be built and linked with:
-
-```bash
-$WASI_SDK_PATH/bin/clang++ -o plugin.wasm --target=wasm32-wasi -Wl,--no-entry -Wl,--export=greet plugin.cpp
-```
-
-Note the `-Wl,--export=greet`
-
-Exports names do not necessarily have to match the function name either. Going back to the first example again. Try:
-
-```c
-EXTISM_EXPORT_AS("greet") int32_t internal_name_for_greet(void)
-```
-
-and build with:
-
-```bash
-$WASI_SDK_PATH/bin/clang++ -o plugin.wasm --target=wasm32-wasi -Wl,--no-entry plugin.cpp
-```
-
 ## Reach Out!
 
 Have a question or just want to drop in and say hi? [Hop on the Discord](https://extism.org/discord)!
