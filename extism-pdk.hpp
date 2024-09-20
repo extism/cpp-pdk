@@ -150,7 +150,8 @@ std::optional<const UniqueHandle<T>> config(const std::string_view key);
 template <typename T = char>
 std::optional<const UniqueHandle<T>> var(const std::string_view name);
 
-bool var_set(const std::string_view name, const imports::RawHandle value);
+template <typename T = char>
+bool var_set(const std::string_view name, UniqueHandle<T> unique_value);
 template <typename T>
 bool var_set(const std::string_view name, const std::span<T> value);
 bool var_set(const std::string_view name, const std::string_view value);
@@ -337,7 +338,7 @@ template <typename T> bool output_type(const T &data) {
 
 template <typename T>
 std::optional<const UniqueHandle<T>> config(const std::string_view key) {
-  if (auto kh = UniqueHandle<char>::from(key)) {
+  if (auto kh = Handle<char>::from(key)) {
     auto rawvh = imports::config_get(*kh);
     if (rawvh) {
       return UniqueHandle<T>(rawvh);
@@ -348,7 +349,7 @@ std::optional<const UniqueHandle<T>> config(const std::string_view key) {
 
 template <typename T>
 std::optional<const UniqueHandle<T>> var(const std::string_view name) {
-  if (auto kh = UniqueHandle<char>::from(name)) {
+  if (auto kh = Handle<char>::from(name)) {
     auto rawvh = imports::var_get(*kh);
     if (rawvh) {
       return UniqueHandle<T>(rawvh);
@@ -358,12 +359,23 @@ std::optional<const UniqueHandle<T>> var(const std::string_view name) {
 }
 
 template <typename T>
-bool var_set(const std::string_view name, const std::span<T> value) {
-  auto nh = UniqueHandle<const char>::from(name);
+bool var_set(const std::string_view name, UniqueHandle<T> unique_value) {
+  auto nh = Handle<const char>::from(name);
   if (!nh) {
     return false;
   }
-  auto vh = UniqueHandle<T>::from(value);
+  auto value = unique_value.release();
+  imports::var_set(*nh, value);
+  return true;
+}
+
+template <typename T>
+bool var_set(const std::string_view name, const std::span<T> value) {
+  auto nh = Handle<const char>::from(name);
+  if (!nh) {
+    return false;
+  }
+  auto vh = Handle<T>::from(value);
   if (!vh) {
     return false;
   }
@@ -373,11 +385,11 @@ bool var_set(const std::string_view name, const std::span<T> value) {
 
 template <typename T>
 bool var_set_type(const std::string_view name, const T &data) {
-  auto nh = UniqueHandle<const char>::from(name);
+  auto nh = Handle<const char>::from(name);
   if (!nh) {
     return false;
   }
-  if (auto h = UniqueHandle<const T>::from(
+  if (auto h = Handle<const T>::from(
           std::span<const T, 1>{std::addressof(data), 1})) {
     imports::var_set(*nh, *h);
     return true;
@@ -388,15 +400,15 @@ bool var_set_type(const std::string_view name, const T &data) {
 template <typename T, typename U>
 std::optional<HttpResponse<T>> http_request(const std::string_view req,
                                             const std::span<const U> body) {
-  auto reqh = UniqueHandle<char>::from(req);
+  auto reqh = Handle<char>::from(req);
   if (!reqh) {
     return std::nullopt;
   }
-  auto bh = UniqueHandle<U>::from(body);
+  auto bh = Handle<U>::from(body);
   if (!bh) {
     return std::nullopt;
   }
-  auto rawh = imports::http_request(*reqh, 0);
+  auto rawh = imports::http_request(*reqh, *bh);
   if (!rawh) {
     return std::nullopt;
   }
@@ -436,22 +448,13 @@ bool error_set(const std::string_view s) {
   return false;
 }
 
-bool var_set(const std::string_view name, const imports::RawHandle value) {
-  auto nh = UniqueHandle<const char>::from(name);
-  if (!nh) {
-    return false;
-  }
-  imports::var_set(*nh, value);
-  return true;
-}
-
 bool var_set(const std::string_view name, const std::string_view value) {
   return var_set<const char>(name, value);
 }
 
 // Write to Extism log
 bool log(const std::string_view message, const Log level) {
-  auto buf = UniqueHandle<const char>::from(message);
+  auto buf = Handle<const char>::from(message);
   if (!buf) {
     return false;
   }
