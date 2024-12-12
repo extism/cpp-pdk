@@ -68,6 +68,9 @@ extern RawHandle http_request(const RawHandle, const RawHandle);
 EXTISM_IMPORT_ENV("http_status_code")
 extern int32_t http_status_code(void);
 
+EXTISM_IMPORT_ENV("http_headers")
+extern RawHandle http_headers(void);
+
 EXTISM_IMPORT_ENV("log_info")
 extern void log_info(const RawHandle);
 EXTISM_IMPORT_ENV("log_debug")
@@ -186,6 +189,9 @@ public:
       : handle(std::move(handle)), status(imports::http_status_code()) {}
 
   const UniqueHandle<T> &body() { return handle; }
+  std::string headers() {
+    return UniqueHandle<char>(imports::http_headers()).string();
+  }
 };
 
 template <typename T, typename U>
