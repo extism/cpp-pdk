@@ -24,10 +24,11 @@ test-strvar: strvar.wasm
 	extism call strvar.wasm --wasi --loop 5 run_test | grep -Fxq 'aaaaa'
 
 test-log: log.wasm
-	extism call log.wasm --wasi --input 'debug' --log-level=debug run_test 2>&1 | grep -q 'debug'
-	extism call log.wasm --wasi --input 'info' --log-level=debug run_test 2>&1 | grep -q 'info'
-	extism call log.wasm --wasi --input 'warn' --log-level=debug run_test 2>&1 | grep -q 'warn'
-	extism call log.wasm --wasi --input 'error' --log-level=debug run_test 2>&1 | grep -q 'error'
+	extism call log.wasm --wasi --log-level=trace run_test 2>&1 | perl log-matches.pl trace
+	extism call log.wasm --wasi --log-level=debug run_test 2>&1 | perl log-matches.pl debug
+	extism call log.wasm --wasi --log-level=info run_test 2>&1 | perl log-matches.pl info
+	extism call log.wasm --wasi --log-level=warn run_test 2>&1 | perl log-matches.pl warn
+	extism call log.wasm --wasi --log-level=error run_test 2>&1 | perl log-matches.pl error
 
 test-http: http.wasm
 	extism call http.wasm --wasi --input "" --allow-host "*" --enable-http-response-headers --log-level=debug run_test

@@ -27,6 +27,14 @@ namespace extism {
 #define EXTISM_IMPORT_USER(b)                                                  \
   __attribute__((import_module(EXTISM_USER_MODULE), import_name(b)))
 
+typedef enum {
+  Trace,
+  Debug,
+  Info,
+  Warn,
+  Error,
+} Log;
+
 namespace imports {
 typedef uint64_t ExtismPointer;
 class RawHandle {
@@ -71,14 +79,19 @@ extern int32_t http_status_code(void);
 EXTISM_IMPORT_ENV("http_headers")
 extern RawHandle http_headers(void);
 
-EXTISM_IMPORT_ENV("log_info")
-extern void log_info(const RawHandle);
+EXTISM_IMPORT_ENV("log_trace")
+extern void log_trace(const RawHandle);
 EXTISM_IMPORT_ENV("log_debug")
 extern void log_debug(const RawHandle);
+EXTISM_IMPORT_ENV("log_info")
+extern void log_info(const RawHandle);
 EXTISM_IMPORT_ENV("log_warn")
 extern void log_warn(const RawHandle);
 EXTISM_IMPORT_ENV("log_error")
 extern void log_error(const RawHandle);
+static_assert(sizeof(Log) == sizeof(int32_t));
+EXTISM_IMPORT_ENV("get_log_level")
+extern Log get_log_level();
 
 EXTISM_IMPORT_ENV("output_set")
 extern void output_set(const ExtismPointer, const uint64_t);
@@ -161,17 +174,11 @@ bool var_set(const std::string_view name, const std::string_view value);
 template <typename T>
 bool var_set_type(const std::string_view name, const T &data);
 
-bool log_info(const std::string_view message);
+bool log_trace(const std::string_view message);
 bool log_debug(const std::string_view message);
+bool log_info(const std::string_view message);
 bool log_warn(const std::string_view message);
 bool log_error(const std::string_view message);
-
-typedef enum {
-  Info,
-  Debug,
-  Warn,
-  Error,
-} Log;
 
 bool log(const std::string_view message, const Log level);
 
@@ -460,16 +467,22 @@ bool var_set(const std::string_view name, const std::string_view value) {
 
 // Write to Extism log
 bool log(const std::string_view message, const Log level) {
+  if (level < imports::get_log_level()) {
+    return false;
+  }
   auto buf = Handle<const char>::from(message);
   if (!buf) {
     return false;
   }
   switch (level) {
-  case Info:
-    imports::log_info(*buf);
+  case Trace:
+    imports::log_trace(*buf);
     break;
   case Debug:
     imports::log_debug(*buf);
+    break;
+  case Info:
+    imports::log_info(*buf);
     break;
   case Warn:
     imports::log_warn(*buf);
@@ -481,9 +494,9 @@ bool log(const std::string_view message, const Log level) {
   return true;
 }
 
-bool log_info(const std::string_view message) { return log(message, Info); }
+bool log_trace(const std::string_view message) { return log(message, Trace); }
 bool log_debug(const std::string_view message) { return log(message, Debug); }
-
+bool log_info(const std::string_view message) { return log(message, Info); }
 bool log_warn(const std::string_view message) { return log(message, Warn); }
 bool log_error(const std::string_view message) { return log(message, Error); }
 
