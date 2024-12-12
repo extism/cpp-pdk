@@ -1,7 +1,7 @@
 WASI_SDK_PATH?=../wasi-sdk
 
 .PHONY: test test-%
-test: test-input test-fail test-config test-var test-strvar test-log
+test: test-input test-fail test-config test-var test-strvar test-log test-http
 
 .PRECIOUS: %.wasm
 %.wasm: %.cpp util.h ../extism-pdk.hpp
@@ -28,5 +28,9 @@ test-log: log.wasm
 	extism call log.wasm --wasi --input 'info' --log-level=debug run_test 2>&1 | grep -q 'info'
 	extism call log.wasm --wasi --input 'warn' --log-level=debug run_test 2>&1 | grep -q 'warn'
 	extism call log.wasm --wasi --input 'error' --log-level=debug run_test 2>&1 | grep -q 'error'
+
+test-http: http.wasm
+	extism call http.wasm --wasi --input "" --allow-host "*" --enable-http-response-headers --log-level=debug run_test
+
 clean:
 	rm -f *.wasm
