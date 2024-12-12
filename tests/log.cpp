@@ -5,18 +5,11 @@
 int32_t EXTISM_EXPORTED_FUNCTION(run_test) {
   // test logging
   {
-    const std::string input = extism::input().string();
-    if (input == "debug") {
-      extism::log_debug("debug");
-    } else if (input == "info") {
-      extism::log_info("info");
-    } else if (input == "warn") {
-      extism::log_info("warn");
-    } else if (input == "error") {
-      extism::log_error("error");
-    } else {
-      assert(0);
-    }
+    extism::log_trace("trace");
+    extism::log_debug("debug");
+    extism::log_info("info");
+    extism::log_warn("warn");
+    extism::log_error("error");
   }
 
   return 0;
